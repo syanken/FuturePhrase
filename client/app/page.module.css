@@ -1,0 +1,98 @@
+/* 1. 主容器：全屏宽度，全屏高度，白色背景 */
+.container {
+  display: flex;             /* 启用 Flex 布局 */
+  width: 100vw;              /* 宽度占满视口 */
+  height: 100vh;             /* 高度占满视口 */
+  background-color: #ffffff; /* 白色背景 */
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  color: #333;
+  box-sizing: border-box;    /* 确保 padding 不会撑大容器 */
+}
+
+/* 2. 通用列样式：左右两列各占 50% */
+.leftColumn,
+.rightColumn {
+  flex: 1;                   /* 平分宽度 */
+  display: flex;             /* 内部也使用 Flex 以便居中内容 */
+  flex-direction: column;    /* 垂直排列 */
+  align-items: center;       /* 水平居中 */
+  justify-content: center;   /* 垂直居中 */
+  padding: 20px;             /* 内边距 */
+  overflow-y: scroll;
+}
+
+/* 3. 左列特有样式 */
+.leftColumn {
+  border-right: 1px solid #eee; /* 可选：中间加一条淡淡的分割线 */
+  text-align: center;           /* 文字居中 */
+}
+
+
+/* 5. 右列特有样式 */
+.rightColumn {
+  background-color: #fafafa;
+  max-width: 50%;
+}
+
+/* 6. 响应式：手机端变成上下排列 */
+@media (max-width: 768px) {
+  .container {
+    flex-direction: column; /* 垂直方向排列 */
+    height: auto;           /* 高度自动，允许滚动 */
+  }
+  
+  .leftColumn, .rightColumn {
+    width: 100%;            /* 宽度占满 */
+    border-right: none;     /* 去掉分割线 */
+    padding: 40px 20px;     /* 增加上下间距 */
+  }
+}
+
+.button{
+    width: 80%;
+    height: 40px;
+    background-color: lightgreen;
+    border: 0;
+    border-radius: 5px;
+    font-size: large;
+    cursor: pointer; 
+}
+
+.button:hover{
+    background-color: #4ade80; 
+    transform: scale(1.02);  
+    box-shadow: 0 4px 12px rgba(74, 222, 128, 0.4); 
+}
+
+.button:active {
+    transform: scale(0.98);
+    background-color: #22c55e;
+}
+
+
+.textarea{
+    width: 80%;
+    height: 80px;
+    border-radius: 5px;
+    font-size: large; 
+    resize: vertical; 
+    max-height: 160px;
+    min-height: 40px;
+    overflow-y: auto;
+    padding: 10px;
+}
+
+.bottomElms{
+    width: 100%;
+    margin-top: auto;
+}
+
+.lyrics{
+    width: 100%;
+    min-height: 50px;
+    display: flex;
+}
+
+.des{
+  margin: 10px;
+}

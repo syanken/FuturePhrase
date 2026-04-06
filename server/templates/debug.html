@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FuturePhrase Debug</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', system-ui, sans-serif; padding: 20px; background: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 10px; margin-bottom: 20px; }
+        .header h1 { font-size: 24px; margin-bottom: 10px; }
+        .header p { opacity: 0.9; }
+        .card { background: white; padding: 20px; border-radius: 10px; margin-bottom: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .card h2 { font-size: 18px; margin-bottom: 15px; color: #333; border-bottom: 2px solid #667eea; padding-bottom: 10px; }
+        .mode-selector { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 20px; }
+        .mode-btn { padding: 15px; border: 2px solid #ddd; background: white; border-radius: 8px; cursor: pointer; transition: all 0.3s; text-align: center; }
+        .mode-btn:hover { border-color: #667eea; background: #f0f4ff; }
+        .mode-btn.active { border-color: #667eea; background: #667eea; color: white; }
+        .mode-btn h3 { font-size: 14px; margin-bottom: 5px; }
+        .mode-btn p { font-size: 12px; opacity: 0.8; }
+        .input-group { margin-bottom: 15px; }
+        .input-group label { display: block; margin-bottom: 8px; font-weight: 600; color: #555; }
+        .input-group input, .input-group textarea { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; }
+        .input-group textarea { min-height: 100px; resize: vertical; }
+        .input-group input:focus, .input-group textarea:focus { outline: none; border-color: #667eea; }
+        .btn-group { display: flex; gap: 10px; }
+        .btn { flex: 1; padding: 12px 24px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 600; transition: all 0.3s; }
+        .btn-primary { background: #667eea; color: white; }
+        .btn-primary:hover { background: #5568d3; }
+        .btn-secondary { background: #e0e0e0; color: #333; }
+        .btn-secondary:hover { background: #d0d0d0; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .output { margin-top: 20px; }
+        .output-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .output-title { font-weight: 600; color: #555; }
+        .status { padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+        .status.idle { background: #e0e0e0; color: #666; }
+        .status.loading { background: #fff3cd; color: #856404; }
+        .status.success { background: #d4edda; color: #155724; }
+        .status.error { background: #f8d7da; color: #721c24; }
+        .output-content { background: #f8f9fa; border: 1px solid #e9ecef; border-radius: 6px; padding: 15px; min-height: 100px; max-height: 400px; overflow-y: auto; white-space: pre-wrap; font-family: 'Courier New', monospace; font-size: 13px; }
+        .stream-indicator { display: inline-block; width: 10px; height: 10px; background: #28a745; border-radius: 50%; margin-left: 10px; animation: pulse 1s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .preset-buttons { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+        .preset-btn { padding: 6px 12px; background: #e9ecef; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; transition: all 0.2s; }
+        .preset-btn:hover { background: #dee2e6; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>FuturePhrase Debug Dashboard</h1>
+            <p>AI 歌词创作工具 - 调试控制台</p>
+        </div>
+
+        <div class="card">
+            <h2>模式选择</h2>
+            <div class="mode-selector">
+                <div class="mode-btn active" data-mode="full" onclick="selectMode('full')">
+                    <h3>自由创作</h3>
+                    <p>根据主题生成完整歌词</p>
+                </div>
+                <div class="mode-btn" data-mode="auto_complete" onclick="selectMode('auto_complete')">
+                    <h3>自动补全</h3>
+                    <p>填写歌词中的占位符</p>
+                </div>
+                <div class="mode-btn" data-mode="imitate" onclick="selectMode('imitate')">
+                    <h3>风格模仿</h3>
+                    <p>模仿指定歌曲风格</p>
+                </div>
+                <div class="mode-btn" data-mode="fitting" onclick="selectMode('fitting')">
+                    <h3>歌词填空</h3>
+                    <p>根据模板精确填词</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>输入参数</h2>
+            <div class="input-group">
+                <label for="input-text">输入内容</label>
+                <textarea id="input-text" placeholder="请输入创作主题或歌词片段..."></textarea>
+                <div class="preset-buttons" id="preset-buttons"></div>
+            </div>
+            <div class="input-group">
+                <label for="style-input">风格偏好 (可选)</label>
+                <input type="text" id="style-input" placeholder="例如: 流行、古风、摇滚、民谣...">
+            </div>
+            <div class="btn-group">
+                <button class="btn btn-primary" id="generate-btn" onclick="generate()">开始生成</button>
+                <button class="btn btn-secondary" id="clear-btn" onclick="clearOutput()">清空输出</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="output-header">
+                <div>
+                    <span class="output-title">输出结果</span>
+                    <span class="stream-indicator" id="stream-indicator" style="display: none;"></span>
+                </div>
+                <span class="status idle" id="status">空闲</span>
+            </div>
+            <div class="output-content" id="output-content"></div>
+        </div>
+    </div>
+
+    <script>
+        let currentMode = 'full';
+        let controller = null;
+
+        const presets = {
+            full: [
+                { text: "写一首关于失恋的歌曲,包含思念、遗憾和释怀的情感", style: "流行" },
+                { text: "创作一首古风歌词,主题是江南烟雨和离别", style: "古风" },
+                { text: "写一首励志歌曲,鼓励年轻人追逐梦想", style: "摇滚" }
+            ],
+            auto_complete: [
+                { text: "天青色等【PLACEHOLDER】,而我在等您", style: "" },
+                { text: "月光下的【PLACEHOLDER】,诉说着【PLACEHOLDER】", style: "" },
+                { text: "那年夏天,【PLACEHOLDER】在【PLACEHOLDER】相遇", style: "" }
+            ],
+            imitate: [
+                { text: "模仿《青花瓷》的风格写一段歌词", style: "" },
+                { text: "模仿周杰伦的风格创作一首关于校园的歌", style: "" }
+            ],
+            fitting: [
+                { text: "思念像风______(4字),吹过______(6字)", style: "" },
+                { text: "______(3字)的夜,______(8字)", style: "" },
+                { text: "这里没有______(5字),只有______(6字)", style: "" }
+            ]
+        };
+
+        function selectMode(mode) {
+            currentMode = mode;
+            document.querySelectorAll('.mode-btn').forEach(btn => {
+                btn.classList.remove('active');
+                if (btn.dataset.mode === mode) {
+                    btn.classList.add('active');
+                }
+            });
+            updatePresets();
+            clearOutput();
+        }
+
+        function updatePresets() {
+            const container = document.getElementById('preset-buttons');
+            const modePresets = presets[currentMode] || [];
+            container.innerHTML = modePresets.map(preset => 
+                `<button class="preset-btn" onclick="applyPreset('${preset.text}', '${preset.style}')">${preset.text.substring(0, 20)}${preset.text.length > 20 ? '...' : ''}</button>`
+            ).join('');
+        }
+
+        function applyPreset(text, style) {
+            document.getElementById('input-text').value = text;
+            document.getElementById('style-input').value = style;
+        }
+
+        function updateStatus(status) {
+            const statusEl = document.getElementById('status');
+            statusEl.className = 'status ' + status;
+            statusEl.textContent = {
+                'idle': '空闲',
+                'loading': '生成中...',
+                'success': '完成',
+                'error': '错误'
+            }[status];
+        }
+
+        function clearOutput() {
+            document.getElementById('output-content').textContent = '';
+            document.getElementById('stream-indicator').style.display = 'none';
+        }
+
+        async function generate() {
+            const inputText = document.getElementById('input-text').value.trim();
+            const style = document.getElementById('style-input').value.trim();
+
+            if (!inputText) {
+                alert('请输入内容');
+                return;
+            }
+
+            if (controller) {
+                controller.abort();
+            }
+
+            controller = new AbortController();
+            const generateBtn = document.getElementById('generate-btn');
+            const outputContent = document.getElementById('output-content');
+            const streamIndicator = document.getElementById('stream-indicator');
+
+            generateBtn.disabled = true;
+            generateBtn.textContent = '生成中...';
+            updateStatus('loading');
+            streamIndicator.style.display = 'inline-block';
+            outputContent.textContent = '';
+
+            try {
+                const response = await fetch('http://localhost:6789/api/v1/generate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        theme: inputText,
+                        style: style,
+                        mode: currentMode
+                    }),
+                    signal: controller.signal
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let fullText = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\n');
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const data = line.slice(6);
+                            if (data.trim()) {
+                                fullText += data;
+                                outputContent.textContent = fullText;
+                                outputContent.scrollTop = outputContent.scrollHeight;
+                            }
+                        }
+                    }
+                }
+
+                updateStatus('success');
+
+            } catch (error) {
+                if (error.name === 'AbortError') {
+                    outputContent.textContent += '\n\n[已取消]';
+                } else {
+                    updateStatus('error');
+                    outputContent.textContent = `错误: ${error.message}`;
+                }
+            } finally {
+                generateBtn.disabled = false;
+                generateBtn.textContent = '开始生成';
+                streamIndicator.style.display = 'none';
+                controller = null;
+            }
+        }
+
+        // 初始化
+        updatePresets();
+    </script>
+</body>
+</html>

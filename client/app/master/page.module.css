@@ -1,0 +1,172 @@
+
+.pageContainer {
+  padding: 40px;
+  font-family: "Times New Roman", serif;
+  background-color: #fdfdfd;
+  min-height: 100vh;
+}
+
+.header {
+  text-align: center;
+  margin-bottom: 40px;
+}
+
+.title {
+  font-size: 2rem;
+  margin: 0 0 10px 0;
+  color: #333;
+}
+
+.meta {
+  font-size: 1rem;
+  color: #666;
+  display: flex;
+  justify-content: center;
+  gap: 20px;
+}
+
+.scoreSystem {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.scoreBody {
+  width: 100%;
+}
+
+.segmentLabel {
+  font-size: 12px;
+  color: #667eea;
+  font-weight: 600;
+  padding: 4px 0;
+  border-bottom: 1px dashed #e0e0e0;
+  margin-bottom: 8px;
+}
+
+.measureRow {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  padding: 4px 0;
+}
+
+.measure {
+  display: flex;
+  align-items: stretch;
+}
+
+.barLine {
+  width: 2px;
+  flex-shrink: 0;
+  height: 50%;
+  background-color: #000;
+  margin: 0 5;
+}
+.endBarLine {
+  width: 4px;
+  height: 50px;
+  background-color: #000;
+  margin-top: 8px;
+}
+
+.notesRow {
+  display: flex;
+  flex: 1;
+}
+
+.beatGroup {
+  display: flex;
+  flex: 1;
+  box-sizing: border-box;
+  justify-content: center;
+}
+
+/* --- 核心：单个拍子 (Beat) --- */
+.beatCell {
+  /* flex: 1 1 50px;  */
+  display: grid;
+  grid-template-rows: 4px 20px 2px 2px 2px 4px 20px;
+  /* min-width: 20px;  */
+  text-align: center;
+  position: relative;
+}
+
+/* 第0行：高音点 */
+.highDots {
+  grid-row: 1;
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+}
+
+/* 第1行：数字 */
+.pitch {
+  grid-row: 2;
+  font-size: 24px;
+  font-weight: bold;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 第2-4行：减时线容器 */
+.underlineContainer {
+  grid-row: 3 / 6;
+  position: relative;
+  width: 100%;
+}
+
+/* 线条的基础样式 */
+.line {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  height: 1px;
+  background-color: #000;
+}
+
+/* 第一条线 (所有减时音符都有) */
+.line1 { top: 0; }
+
+/* 第二条线 (十六分、三十二分) */
+.line2 { top: 2px; }
+
+/* 第三条线 (三十二分) */
+.line3 { top: 4px; }
+
+/* 倒数第2行：低音点 */
+.lowDots {
+  grid-row: 6;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+}
+
+/* 倒数第1行：歌词 */
+.lyric {
+  grid-row: 7;
+  color: #444;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  font-size: 20px;
+}
+.lyricInput{
+  max-width: 20px;
+  background: transparent; /* 去掉白色背景 */
+  border: none;      /* 去掉边框 */
+  border-bottom: 1px dashed #ccc; /* 可选：加个虚线底边提示可输入 */
+  text-align: center;
+  font-size: 20px;
+  color: #444;
+  padding: 0;
+  margin: 0;
+  font-family: "SimHei", "黑体";
+}
+.dot {
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background-color: #000;
+}

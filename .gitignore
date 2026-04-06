@@ -1,0 +1,62 @@
+# ==========================================
+# ⚛️ 前端目录忽略规则 (client/)
+# ==========================================
+
+# 依赖包
+client/node_modules/
+client/bower_components/
+
+# Next.js 核心构建与缓存
+client/.next/
+client/out/
+client/.turbo/
+
+# 前端构建产物
+client/dist/
+client/build/
+
+# 前端环境配置 (敏感信息)
+client/.env
+client/.env.local
+client/.env.production
+
+# ==========================================
+# 🐍 后端目录忽略规则 (server/)
+# ==========================================
+
+# Python 缓存与编译文件
+server/**/__pycache__/
+server/*.pyc
+server/*.pyo
+server/*.pyd
+server/.pytest_cache/
+
+# Python 虚拟环境 (通常建在 server 目录下)
+server/venv/
+server/.venv/
+server/env/
+server/ENV/
+
+# 后端日志
+server/*.log
+server/logs/
+
+# 后端环境配置 (敏感信息)
+server/.env
+server/.env.local
+
+# ==========================================
+# 🛠️ 全局/根目录忽略规则
+# ==========================================
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+
+# IDE 配置 (如果你想共享 VS Code 配置，可以注释掉下面这行)
+.vscode/
+.idea/
+
+# 根目录下的临时文件
+*.log
+npm-debug.log*
