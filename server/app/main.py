@@ -1,11 +1,19 @@
 import sys
 import io
+import os
+from dotenv import load_dotenv
+# 最先加载环境变量
+load_dotenv()
+
 import time
-import uvicorn
-from models import Work, ChatRequest
-from session import init_demo_work, get_work, update_work
-from orchestrator import Orchestrator
 import json
+import uvicorn
+from models import Work, ChatRequest, ConfirmRequest, Candidate
+from session import (
+    init_mock_data, get_project, clear_chat_history,
+    get_all_projects, create_project, delete_project, update_project
+)
+from agent import lyric_agent
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,16 +21,14 @@ from typing import Generic, TypeVar, Optional
 from pydantic import BaseModel, Field
 from datetime import datetime
 from workflows.lyric_gen import LyricWorkflow, AutoCompleteWorkflow, ImitateWorkflow, LyricFittingWorkflow
-from dotenv import load_dotenv
-load_dotenv()
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 # 应用元数据
 app = FastAPI(
     title="FuturePhrase API",
-    description="AI 歌词创作服务 - 支持自由创作、自动补全、风格模仿、歌词填空四种模式",
-    version="1.0.0",
+    description="AI 歌词创作服务 - 项目级隔离架构",
+    version="3.0.0",
 )
 
 app.add_middleware(
@@ -31,8 +37,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-demo_work = init_demo_work()
-orchestrator = Orchestrator()
+
+# 初始化演示项目
+init_mock_data()
+
 # Workflow 注册表 - 避免重复的 if-elif
 WORKFLOW_REGISTRY = {
     'full': LyricWorkflow,
@@ -52,6 +60,18 @@ class GenerationRequest(BaseModel):
     theme: str = Field(..., min_length=1, max_length=2000, description="输入主题或歌词")
     style: str = Field(default="", max_length=100, description="风格偏好（可选）")
     mode: str = Field(default="full", pattern="^(full|auto_complete|imitate|fitting)$")
+
+class ChatRequestWithProject(BaseModel):
+    """带项目ID的对话请求"""
+    project_id: str
+    message: str
+    target_segment_ids: list[str] = []
+
+class ConfirmRequestWithProject(BaseModel):
+    """带项目ID的确认请求"""
+    project_id: str
+    candidate_id: str
+    action: str  # "accept" | "reject"
 
 # 全局异常处理中间件
 @app.exception_handler(HTTPException)
@@ -88,65 +108,130 @@ async def health_check():
         "uptime": time.time() - start_time
     }
 
-@app.get("/api/v1/work", tags=["Demo"])
-async def get_current_work():
-    """获取当前作品"""
-    work = get_work("demo_work_001")
-    return {"code": 0, "data": work.model_dump()}
+# ==================== 项目管理 API ====================
 
-@app.post("/api/v1/work/chat", tags=["Demo"])
-async def chat_with_work(req: ChatRequest):
-    """AI 对话（核心接口）"""
-    work = get_work("demo_work_001")
-    if not work:
-        raise HTTPException(status_code=404, detail="作品不存在")
+@app.get("/api/v1/projects", tags=["项目管理"])
+async def list_projects():
+    """获取所有项目列表"""
+    projects = get_all_projects()
+    return {"code": 0, "data": [p.model_dump() for p in projects]}
+
+
+@app.post("/api/v1/projects", tags=["项目管理"])
+async def new_project(req: dict = None):
+    """创建新项目"""
+    title = req.get("title", "未命名歌曲") if req else "未命名歌曲"
+    project = create_project(title)
+    return {"code": 0, "data": project.model_dump()}
+
+
+@app.delete("/api/v1/projects/{project_id}", tags=["项目管理"])
+async def remove_project(project_id: str):
+    """删除项目"""
+    projects = get_all_projects()
+    if len(projects) <= 1:
+        raise HTTPException(status_code=400, detail="至少保留一个项目")
+    
+    success = delete_project(project_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    
+    return {"code": 0, "message": "项目已删除"}
+
+
+@app.put("/api/v1/projects/{project_id}", tags=["项目管理"])
+async def update_project_endpoint(project_id: str, req: dict):
+    """整体更新项目（标题、歌词、简谱）"""
+    project = update_project(project_id, req)
+    if not project:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    
+    return {"code": 0, "data": project.model_dump()}
+
+
+@app.get("/api/v1/projects/{project_id}", tags=["项目管理"])
+async def get_project_detail(project_id: str):
+    """获取单个项目详情（包含聊天历史和候选）"""
+    project = get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    return {"code": 0, "data": project.model_dump()}
+
+
+# ==================== 聊天和候选 API（项目级） ====================
+
+@app.post("/api/v1/projects/{project_id}/chat", tags=["AI对话"])
+async def chat_with_project(project_id: str, req: ChatRequest):
+    """AI 对话（核心接口）- 项目级隔离"""
+    project = get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    
+    def json_serializer(obj):
+        """自定义 JSON 序列化器"""
+        if hasattr(obj, 'isoformat'):
+            return obj.isoformat()
+        raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
     
     async def generate():
-        full_response = ""
-        async for chunk in orchestrator.process(req.message, work):
-            full_response += chunk.replace("data: ", "").replace("\n\n", "")
-            
-            yield chunk
-        
-        # 尝试解析完整响应，更新 work
-        try:
-            # 提取 JSON 部分
-            json_start = full_response.find("{")
-            json_end = full_response.rfind("}") + 1
-            if json_start != -1 and json_end > json_start:
-                json_str = full_response[json_start:json_end]
-                data = json.loads(json_str)
-                # 更新段落
-                if "segments" in data:
-                    for seg_update in data["segments"]:
-                        for seg in work.segments:
-                            if seg.id == seg_update.get("id"):
-                                seg.text_content = seg_update.get("text", "")
-                                break
-                    
-                    # 发送更新事件
-                    yield f"event: work_update\ndata: {json.dumps(work.model_dump())}\n\n"
-        except Exception as e:
-            print(f"解析响应失败: {e}")
-        
-        yield "event: done\ndata: {}\n\n"
+        async for event in lyric_agent.process_message(req.message, project_id):
+            event_type = event.get("event", "message")
+            event_data = event.get("data", {})
+            yield f"event: {event_type}\ndata: {json.dumps(event_data, ensure_ascii=False, default=json_serializer)}\n\n"
     
     return StreamingResponse(generate(), media_type="text/event-stream")
 
-@app.put("/api/v1/work/segments", tags=["Demo"])
-async def update_segments(segments: list[dict]):
+
+@app.delete("/api/v1/projects/{project_id}/chat", tags=["AI对话"])
+async def clear_project_chat(project_id: str):
+    """清空项目的聊天历史和候选内容"""
+    success = clear_chat_history(project_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    return {"code": 0, "message": "聊天历史已清空"}
+
+
+@app.post("/api/v1/projects/{project_id}/confirm", tags=["AI对话"])
+async def confirm_candidate_endpoint(project_id: str, req: ConfirmRequest):
+    """确认或拒绝候选内容"""
+    result = await lyric_agent.confirm_candidate(project_id, req.candidate_id, req.action)
+    
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("message", "操作失败"))
+    
+    return {"code": 0, "data": result}
+
+
+@app.get("/api/v1/projects/{project_id}/candidates", tags=["AI对话"])
+async def get_project_candidates(project_id: str):
+    """获取项目的待确认候选内容列表"""
+    project = get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    
+    pending = [c for c in project.candidates if c.status == "pending"]
+    return {"code": 0, "data": [c.model_dump() for c in pending]}
+
+
+@app.put("/api/v1/projects/{project_id}/segments", tags=["AI对话"])
+async def update_project_segments(project_id: str, segments: list[dict]):
     """手动更新段落内容"""
-    work = get_work("demo_work_001")
-    if not work:
-        raise HTTPException(status_code=404, detail="作品不存在")
+    project = get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="项目不存在")
     
     for seg_update in segments:
-        for seg in work.segments:
+        for seg in project.lyrics:
             if seg.id == seg_update.get("id"):
                 seg.text_content = seg_update.get("text_content", "")
+                seg.status = "done"
                 break
     
-    return {"code": 0, "data": work.model_dump()}
+    project.updated_at = datetime.now()
+    return {"code": 0, "data": project.model_dump()}
+
+
+# ==================== 其他 API ====================
 
 @app.get("/api/v1/modes", tags=["系统"])
 async def get_available_modes():

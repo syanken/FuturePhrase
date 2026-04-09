@@ -2,11 +2,19 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import jianpuStyles from './master/page.module.css'
-import { mockProjects } from './mockData'
 import { styles } from './styles'
 import type { JianpuSegment, LyricsSegment, MeasureData, Note, Project } from './types'
 
 const API_URL = 'http://192.168.1.21:6789'
+
+// 防抖函数
+function debounce<T extends (...args: never[]) => void>(fn: T, delay: number): T {
+  let timer: ReturnType<typeof setTimeout> | null = null
+  return ((...args: Parameters<T>) => {
+    if (timer) clearTimeout(timer)
+    timer = setTimeout(() => fn(...args), delay)
+  }) as T
+}
 
 // ===== 布局计算工具函数 =====
 
@@ -288,6 +296,20 @@ const aiToolBtnStyle = (bgColor: string, color: string) => ({
   cursor: 'pointer',
 })
 
+// 小工具按钮样式工厂
+const smallBtnStyle = (color: string) => ({
+  width: 20,
+  height: 20,
+  fontSize: 12,
+  lineHeight: '18px',
+  textAlign: 'center' as const,
+  color,
+  backgroundColor: '#f0f2ff',
+  border: 'none',
+  borderRadius: 4,
+  cursor: 'pointer',
+})
+
 // ===== 主组件 =====
 export default function WorkspaceDemo() {
   // 项目列表状态
@@ -310,65 +332,127 @@ export default function WorkspaceDemo() {
     el.style.height = el.scrollHeight + 'px'
   }
 
-  // 初始化：加载项目列表
+  // 保存状态
+  const [isSaving, setIsSaving] = useState(false)
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null)
+  const workRef = useRef(work)
+  const currentProjectIdRef = useRef(currentProjectId)
+
+  // 保持 ref 同步
   useEffect(() => {
-    setProjects(mockProjects)
-    setCurrentProjectId('proj_001')
-    setWork(mockProjects[0])
-    setMessages([{ role: 'assistant', content: '你好！选择一个项目开始创作，或新建项目。' }])
+    workRef.current = work
+    currentProjectIdRef.current = currentProjectId
+  }, [work, currentProjectId])
+
+  // 防抖保存到后端
+  const saveWorkToBackend = useMemo(
+    () => debounce(async (projectData: Project) => {
+      if (!projectData || !currentProjectIdRef.current) return
+      setIsSaving(true)
+      try {
+        await fetch(`${API_URL}/api/v1/projects/${projectData.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: projectData.title,
+            lyrics: projectData.lyrics,
+            jianpu: projectData.jianpu,
+          }),
+        })
+        setLastSavedAt(new Date())
+      } catch (err) {
+        console.error('保存失败:', err)
+      } finally {
+        setIsSaving(false)
+      }
+    }, 1000),
+    []
+  )
+
+  // work 变化时触发保存（仅当 work 变化时）
+  useEffect(() => {
+    if (work) {
+      saveWorkToBackend(work)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [work])
+
+  // 初始化：从后端加载项目列表
+  useEffect(() => {
+    const loadProjects = async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/v1/projects`)
+        const json = await res.json()
+        if (json.code === 0 && json.data.length > 0) {
+          const projectsData = json.data as Project[]
+          setProjects(projectsData)
+          setCurrentProjectId(projectsData[0].id)
+          setWork(projectsData[0])
+          setMessages([{ role: 'assistant', content: `已切换到「${projectsData[0].title}」，继续创作吧！` }])
+        }
+      } catch (err) {
+        console.error('加载项目失败:', err)
+        setMessages([{ role: 'assistant', content: '加载失败，请刷新页面重试。' }])
+      }
+    }
+    loadProjects()
   }, [])
 
-  // 切换项目
+  // 切换项目（本地切换，无需通知后端）
   const switchProject = (projectId: string) => {
     const project = projects.find(p => p.id === projectId)
-    if (project) {
-      setCurrentProjectId(projectId)
-      setWork(project)
-      setMessages([{ role: 'assistant', content: `已切换到「${project.title}」，继续创作吧！` }])
-    }
+    if (!project || projectId === currentProjectId) return
+
+    // 立即切换 UI
+    setCurrentProjectId(projectId)
+    setWork(project)
+    setMessages([{ role: 'assistant', content: `已切换到「${project.title}」，继续创作吧！` }])
   }
 
   // 新建项目
-  const createNewProject = () => {
-    const newId = `proj_${Date.now()}`
-    const newProject: Project = {
-      id: newId,
-      title: '未命名歌曲',
-      lyrics: [
-        { id: 'seg_verse_1', type: 'verse', order: 0, label: '主歌 A', text_content: '', status: 'draft' },
-        { id: 'seg_chorus_1', type: 'chorus', order: 1, label: '副歌', text_content: '', status: 'draft' },
-        { id: 'seg_verse_2', type: 'verse', order: 2, label: '主歌 A2', text_content: '', status: 'draft' },
-      ],
-      jianpu: [
-        { id: 'seg_verse_1', type: 'verse', order: 0, label: '主歌 A', measures: [], status: 'draft' },
-        { id: 'seg_chorus_1', type: 'chorus', order: 1, label: '副歌', measures: [], status: 'draft' },
-        { id: 'seg_verse_2', type: 'verse', order: 2, label: '主歌 A2', measures: [], status: 'draft' },
-      ],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+  const createNewProject = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/v1/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: '未命名歌曲' }),
+      })
+      const json = await res.json()
+      if (json.code === 0) {
+        const newProject = json.data as Project
+        setProjects(prev => [...prev, newProject])
+        setCurrentProjectId(newProject.id)
+        setWork(newProject)
+        setMessages([{ role: 'assistant', content: '新建项目成功！告诉我你想写一首什么样的歌？' }])
+      }
+    } catch (err) {
+      console.error('新建项目失败:', err)
     }
-
-    setProjects(prev => [...prev, newProject])
-    setCurrentProjectId(newId)
-    setWork(newProject)
-    setMessages([{ role: 'assistant', content: '新建项目成功！告诉我你想写一首什么样的歌？' }])
   }
 
   // 删除项目
-  const deleteProject = (projectId: string, e: React.MouseEvent) => {
+  const deleteProject = async (projectId: string, e: React.MouseEvent) => {
     e.stopPropagation()
     if (projects.length <= 1) {
       alert('至少保留一个项目')
       return
     }
 
-    const newProjects = projects.filter(p => p.id !== projectId)
-    setProjects(newProjects)
+    try {
+      const res = await fetch(`${API_URL}/api/v1/projects/${projectId}`, { method: 'DELETE' })
+      const json = await res.json()
+      if (json.code === 0) {
+        const newProjects = projects.filter(p => p.id !== projectId)
+        setProjects(newProjects)
 
-    if (currentProjectId === projectId) {
-      const firstProject = newProjects[0]
-      setCurrentProjectId(firstProject.id)
-      setWork(firstProject)
+        if (currentProjectId === projectId) {
+          const firstProject = newProjects[0]
+          setCurrentProjectId(firstProject.id)
+          setWork(firstProject)
+        }
+      }
+    } catch (err) {
+      console.error('删除项目失败:', err)
     }
   }
 
@@ -468,6 +552,16 @@ export default function WorkspaceDemo() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  // 清空消息上下文
+  const clearMessages = async () => {
+    try {
+      await fetch(`${API_URL}/api/v1/projects/${currentProjectId}/chat`, { method: 'DELETE' })
+      setMessages([{ role: 'assistant', content: '消息已清空，开始新的对话吧！' }])
+    } catch (err) {
+      console.error('清空失败:', err)
+    }
+  }
+
   // 发送消息
   const sendMessage = async () => {
     if (!input.trim() || isStreaming || !work) return
@@ -479,7 +573,7 @@ export default function WorkspaceDemo() {
     setMessages(prev => [...prev, { role: 'assistant', content: '' }])
 
     try {
-      const response = await fetch(`${API_URL}/api/v1/work/chat`, {
+      const response = await fetch(`${API_URL}/api/v1/projects/${currentProjectId}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: userMessage }),
@@ -490,6 +584,7 @@ export default function WorkspaceDemo() {
 
       if (reader) {
         let buffer = ''
+        let currentEvent = ''
 
         while (true) {
           const { done, value } = await reader.read()
@@ -500,33 +595,139 @@ export default function WorkspaceDemo() {
           buffer = lines.pop() || ''
 
           for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              const data = line.slice(6)
-              if (data && data !== '{}') {
-                setMessages(prev => {
-                  const newMsgs = [...prev]
-                  const last = newMsgs[newMsgs.length - 1]
-                  if (last && last.role === 'assistant') {
-                    newMsgs[newMsgs.length - 1] = {
-                      ...last,
-                      content: last.content + data
+            if (line.startsWith('event: ')) {
+              currentEvent = line.slice(7)
+            } else if (line.startsWith('data: ')) {
+              const dataStr = line.slice(6)
+              if (dataStr && dataStr !== '{}') {
+                try {
+                  const data = JSON.parse(dataStr)
+
+                  if (currentEvent === 'thought') {
+                    // ReAct: 思考过程
+                    const thought = data.content || ''
+                    setMessages(prev => {
+                      const newMsgs = [...prev]
+                      const last = newMsgs[newMsgs.length - 1]
+                      if (last && last.role === 'assistant') {
+                        newMsgs[newMsgs.length - 1] = {
+                          ...last,
+                          content: last.content + (thought ? `💭 ${thought}\n` : '')
+                        }
+                      }
+                      return newMsgs
+                    })
+                  } else if (currentEvent === 'action') {
+                    // ReAct: 执行行动
+                    const tool = data.tool || ''
+                    const args = data.args || {}
+                    setMessages(prev => {
+                      const newMsgs = [...prev]
+                      const last = newMsgs[newMsgs.length - 1]
+                      if (last && last.role === 'assistant') {
+                        newMsgs[newMsgs.length - 1] = {
+                          ...last,
+                          content: last.content + `🔧 调用工具: ${tool}\n`
+                        }
+                      }
+                      return newMsgs
+                    })
+                  } else if (currentEvent === 'observation') {
+                    // ReAct: 观察结果（含评估）
+                    const result = data.result || {}
+                    const evaluation = data.evaluation
+                    const resultStr = typeof result === 'string' ? result : JSON.stringify(result, null, 2)
+                    let evalStr = ''
+                    if (evaluation && evaluation.quality && evaluation.quality !== 'n/a') {
+                      const qualityEmoji = evaluation.quality === 'good' ? '✨' : evaluation.quality === 'acceptable' ? '👍' : '⚠️'
+                      evalStr = ` ${qualityEmoji}[${evaluation.quality}]`
+                      if (evaluation.reason) {
+                        evalStr += ` ${evaluation.reason}`
+                      }
                     }
+                    setMessages(prev => {
+                      const newMsgs = [...prev]
+                      const last = newMsgs[newMsgs.length - 1]
+                      if (last && last.role === 'assistant') {
+                        newMsgs[newMsgs.length - 1] = {
+                          ...last,
+                          content: last.content + `✅ 结果: ${resultStr}${evalStr}\n`
+                        }
+                      }
+                      return newMsgs
+                    })
+                  } else if (currentEvent === 'clarify') {
+                    // 需要用户澄清
+                    const question = data.question || '请提供更多信息'
+                    setMessages(prev => {
+                      const newMsgs = [...prev]
+                      const last = newMsgs[newMsgs.length - 1]
+                      if (last && last.role === 'assistant') {
+                        newMsgs[newMsgs.length - 1] = {
+                          ...last,
+                          content: last.content + `❓ ${question}\n`
+                        }
+                      }
+                      return newMsgs
+                    })
+                  } else if (currentEvent === 'text_chunk') {
+                    // 文本流式输出
+                    const chunk = data.chunk || ''
+                    setMessages(prev => {
+                      const newMsgs = [...prev]
+                      const last = newMsgs[newMsgs.length - 1]
+                      if (last && last.role === 'assistant') {
+                        newMsgs[newMsgs.length - 1] = {
+                          ...last,
+                          content: last.content + chunk
+                        }
+                      }
+                      return newMsgs
+                    })
+                  } else if (currentEvent === 'work_update') {
+                    // 作品更新
+                    setWork(data.work || data)
+                    setProjects(prev => prev.map(p =>
+                      p.id === currentProjectId ? { ...p, ...(data.work || data) } : p
+                    ))
+                  } else if (currentEvent === 'candidate_update') {
+                    // 候选内容更新
+                    console.log('候选内容:', data.candidate)
+                  } else if (currentEvent === 'tool_start') {
+                    // 工具开始
+                    console.log('工具开始:', data.tool_name)
+                  } else if (currentEvent === 'tool_end') {
+                    // 工具结束
+                    console.log('工具结束:', data.tool_name)
+                  } else if (currentEvent === 'error') {
+                    // 错误
+                    setMessages(prev => {
+                      const newMsgs = [...prev]
+                      const last = newMsgs[newMsgs.length - 1]
+                      if (last && last.role === 'assistant') {
+                        newMsgs[newMsgs.length - 1] = {
+                          ...last,
+                          content: `错误: ${data.message || '未知错误'}`
+                        }
+                      }
+                      return newMsgs
+                    })
                   }
-                  return newMsgs
-                })
-              }
-            } else if (line.startsWith('event: work_update')) {
-              const dataLineIdx = lines.indexOf(line) + 1
-              if (dataLineIdx < lines.length) {
-                const dataLine = lines[dataLineIdx]
-                if (dataLine.startsWith('data: ')) {
-                  const workData = JSON.parse(dataLine.slice(6))
-                  setWork(workData)
-                  // 同步更新项目列表中的数据
-                  setProjects(prev => prev.map(p =>
-                    p.id === currentProjectId ? { ...p, ...workData } : p
-                  ))
+                } catch {
+                  // 非 JSON 数据，直接追加
+                  setMessages(prev => {
+                    const newMsgs = [...prev]
+                    const last = newMsgs[newMsgs.length - 1]
+                    if (last && last.role === 'assistant') {
+                      newMsgs[newMsgs.length - 1] = {
+                        ...last,
+                        content: last.content + dataStr
+                      }
+                    }
+                    return newMsgs
+                  })
                 }
+                console.log(messages)
               }
             }
           }
@@ -735,88 +936,15 @@ export default function WorkspaceDemo() {
                   {selectedSegmentId === segment.id && (
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, flexShrink: 0 }} onClick={e => e.stopPropagation()}>
                       <div style={{ display: 'flex', gap: 2 }}>
-                        <button
-                          onClick={() => moveSegment(idx, 'up')}
-                          title="上移"
-                          style={{
-                            width: 20,
-                            height: 20,
-                            fontSize: 12,
-                            lineHeight: '18px',
-                            textAlign: 'center' as const,
-                            color: '#667eea',
-                            backgroundColor: '#f0f2ff',
-                            border: 'none',
-                            borderRadius: 4,
-                            cursor: 'pointer',
-                          }}
-                        >↑</button>
-                        <button
-                          onClick={() => moveSegment(idx, 'down')}
-                          title="下移"
-                          style={{
-                            width: 20,
-                            height: 20,
-                            fontSize: 12,
-                            lineHeight: '18px',
-                            textAlign: 'center' as const,
-                            color: '#667eea',
-                            backgroundColor: '#f0f2ff',
-                            border: 'none',
-                            borderRadius: 4,
-                            cursor: 'pointer',
-                          }}
-                        >↓</button>
+                        <button onClick={() => moveSegment(idx, 'up')} title="上移" style={smallBtnStyle('#475ec4')}>↑</button>
+                        <button onClick={() => moveSegment(idx, 'down')} title="下移" style={smallBtnStyle('#475ec4')}>↓</button>
                       </div>
-                      <button
-                        onClick={() => handleAITool(segment.id, 'generate')}
-                        title="生成"
-                        style={{ ...aiToolBtnStyle('#d1fae5', '#059669'), width: 42, fontSize: 12 }}
-                      >生成</button>
-                      <button
-                        onClick={() => handleAITool(segment.id, 'rewrite')}
-                        title="改写"
-                        style={{ ...aiToolBtnStyle('#e8e0ff', '#7c3aed'), width: 42, fontSize: 12 }}
-                      >改写</button>
-                      <button
-                        onClick={() => handleAITool(segment.id, 'extend')}
-                        title="续写"
-                        style={{ ...aiToolBtnStyle('#e0f2fe', '#0284c7'), width: 42, fontSize: 12 }}
-                      >续写</button>
-
+                      <button onClick={() => handleAITool(segment.id, 'generate')} title="生成" style={{ ...aiToolBtnStyle('#d1fae5', '#059669'), width: 42, fontSize: 12 }}>生成</button>
+                      <button onClick={() => handleAITool(segment.id, 'rewrite')} title="改写" style={{ ...aiToolBtnStyle('#e8e0ff', '#7c3aed'), width: 42, fontSize: 12 }}>改写</button>
+                      <button onClick={() => handleAITool(segment.id, 'extend')} title="续写" style={{ ...aiToolBtnStyle('#e0f2fe', '#0284c7'), width: 42, fontSize: 12 }}>续写</button>
                       <div style={{ display: 'flex', gap: 2 }}>
-                        <button
-                          onClick={() => deleteSegment(segment.id)}
-                          title="删除此段落"
-                          style={{
-                            width: 20,
-                            height: 20,
-                            fontSize: 13,
-                            lineHeight: '20px',
-                            textAlign: 'center' as const,
-                            color: '#ff6b6b',
-                            backgroundColor: '#f0f2ff',
-                            border: 'none',
-                            borderRadius: 4,
-                            cursor: 'pointer',
-                          }}
-                        >×</button>
-                        <button
-                          onClick={() => insertSegment(idx)}
-                          title="在下方插入段落"
-                          style={{
-                            width: 20,
-                            height: 20,
-                            fontSize: 14,
-                            lineHeight: '18px',
-                            textAlign: 'center' as const,
-                            color: '#667eea',
-                            backgroundColor: '#f0f2ff',
-                            border: 'none',
-                            borderRadius: 4,
-                            cursor: 'pointer',
-                          }}
-                        >+</button>
+                        <button onClick={() => deleteSegment(segment.id)} title="删除此段落" style={smallBtnStyle('#ff6b6b')}>×</button>
+                        <button onClick={() => insertSegment(idx)} title="在下方插入段落" style={smallBtnStyle('#475ec4')}>+</button>
                       </div>
                     </div>
                   )}
@@ -875,8 +1003,23 @@ export default function WorkspaceDemo() {
 
       {/* 右侧：AI 对话 */}
       <div style={styles.rightPanel}>
-        <div style={{ padding: 16, borderBottom: '1px solid #e0e0e0', fontWeight: 600 }}>
-          🤖 AI 作词助手
+        <div style={{ padding: 16, borderBottom: '1px solid #e0e0e0', fontWeight: 600, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>🤖 AI 作词助手</span>
+          <button
+            onClick={clearMessages}
+            style={{
+              padding: '4px 12px',
+              fontSize: 12,
+              border: '1px solid #ddd',
+              borderRadius: 4,
+              background: '#fff',
+              cursor: 'pointer',
+              color: '#666',
+            }}
+            title="清空对话历史"
+          >
+            清空上下文
+          </button>
         </div>
 
         <div style={styles.chatMessages}>
