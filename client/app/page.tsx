@@ -318,8 +318,12 @@ export default function WorkspaceDemo() {
 
   // 当前项目（work）
   const [work, setWork] = useState<Project | null>(null)
-  const [messages, setMessages] = useState<{ role: string, content: string }[]>([])
+  const [isInitializing, setIsInitializing] = useState(true)
+  // 消息类型：支持不同的事件类型作为独立消息块
+  const [messages, setMessages] = useState<{ role: string, content: string, msgType?: string, lyricsContent?: string, timestamp: number, candidateMeta?: { targetId?: string, candidateType?: string, description?: string } }[]>([])
   const [input, setInput] = useState('')
+  // AI生成的歌词候选，用于应用功能（使用ref避免闭包问题）
+  const pendingLyricsRef = useRef<{ content: string, timestamp: number } | null>(null)
   const [isStreaming, setIsStreaming] = useState(false)
   const [viewMode, setViewMode] = useState<'lyrics' | 'jianpu'>('lyrics')
   const [selectedSegmentId, setSelectedSegmentId] = useState<string>('')
@@ -332,11 +336,20 @@ export default function WorkspaceDemo() {
     el.style.height = el.scrollHeight + 'px'
   }
 
+  // 将歌词中的中文标点替换为换行符，用于卡片展示
+  const formatLyricsForDisplay = (text: string): string => {
+    if (!text) return ''
+    return text
+      .replace(/[，。！？；、]/g, '\n')
+      .replace(/\n{2,}/g, '\n')
+      .trim()
+  }
+
   // 保存状态
   const [isSaving, setIsSaving] = useState(false)
-  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null)
   const workRef = useRef(work)
   const currentProjectIdRef = useRef(currentProjectId)
+  const isInitializingRef = useRef(true)
 
   // 保持 ref 同步
   useEffect(() => {
@@ -359,7 +372,6 @@ export default function WorkspaceDemo() {
             jianpu: projectData.jianpu,
           }),
         })
-        setLastSavedAt(new Date())
       } catch (err) {
         console.error('保存失败:', err)
       } finally {
@@ -379,6 +391,23 @@ export default function WorkspaceDemo() {
 
   // 初始化：从后端加载项目列表
   useEffect(() => {
+    const createDefaultProject = () => {
+      const defaultProject: Project = {
+        id: `default_${Date.now()}`,
+        title: '我的歌曲',
+        lyrics: [],
+        jianpu: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }
+      setProjects([defaultProject])
+      setCurrentProjectId(defaultProject.id)
+      setWork(defaultProject)
+      setMessages([{ role: 'assistant', content: '你好！告诉我你想写一首什么样的歌？', timestamp: Date.now() }])
+      setIsInitializing(false)
+      isInitializingRef.current = false
+    }
+
     const loadProjects = async () => {
       try {
         const res = await fetch(`${API_URL}/api/v1/projects`)
@@ -388,14 +417,28 @@ export default function WorkspaceDemo() {
           setProjects(projectsData)
           setCurrentProjectId(projectsData[0].id)
           setWork(projectsData[0])
-          setMessages([{ role: 'assistant', content: `已切换到「${projectsData[0].title}」，继续创作吧！` }])
+          setMessages([{ role: 'assistant', content: `已切换到「${projectsData[0].title}」，继续创作吧！`, timestamp: Date.now() }])
+        } else {
+          createDefaultProject()
         }
       } catch (err) {
         console.error('加载项目失败:', err)
-        setMessages([{ role: 'assistant', content: '加载失败，请刷新页面重试。' }])
+        createDefaultProject()
+      } finally {
+        isInitializingRef.current = false
       }
     }
+
+    // 设置超时，防止无限等待
+    const timeout = setTimeout(() => {
+      if (isInitializingRef.current) {
+        createDefaultProject()
+      }
+    }, 5000)
+
     loadProjects()
+
+    return () => clearTimeout(timeout)
   }, [])
 
   // 切换项目（本地切换，无需通知后端）
@@ -406,7 +449,7 @@ export default function WorkspaceDemo() {
     // 立即切换 UI
     setCurrentProjectId(projectId)
     setWork(project)
-    setMessages([{ role: 'assistant', content: `已切换到「${project.title}」，继续创作吧！` }])
+    setMessages([{ role: 'assistant', content: `已切换到「${project.title}」，继续创作吧！`, timestamp: Date.now() }])
   }
 
   // 新建项目
@@ -423,7 +466,7 @@ export default function WorkspaceDemo() {
         setProjects(prev => [...prev, newProject])
         setCurrentProjectId(newProject.id)
         setWork(newProject)
-        setMessages([{ role: 'assistant', content: '新建项目成功！告诉我你想写一首什么样的歌？' }])
+        setMessages([{ role: 'assistant', content: '新建项目成功！告诉我你想写一首什么样的歌？', timestamp: Date.now() }])
       }
     } catch (err) {
       console.error('新建项目失败:', err)
@@ -552,11 +595,168 @@ export default function WorkspaceDemo() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  // 将AI生成的歌词应用到工作区
+  const applyLyricsToWorkspace = (lyricsContent: string, candidateMeta?: { targetId?: string, candidateType?: string, description?: string }) => {
+    if (!work || !lyricsContent.trim()) return
+
+    // 如果是 segment 类型（如 rewrite_segment_tool 的结果），更新到目标段落卡片
+    if (candidateMeta?.candidateType === 'segment' && candidateMeta?.targetId) {
+      const targetSeg = work.lyrics.find(s => s.id === candidateMeta.targetId)
+      if (targetSeg) {
+        // 将中文标点替换为换行，在一个卡片内分行显示
+        const formatted = lyricsContent.trim().replace(/[，。！？；、]/g, '\n').replace(/\n{2,}/g, '\n')
+        const newLyrics = work.lyrics.map(s =>
+          s.id === candidateMeta.targetId ? { ...s, text_content: formatted } : s
+        )
+        const updatedWork = { ...work, lyrics: newLyrics }
+        setWork(updatedWork)
+        setProjects(prev => prev.map(p => p.id === currentProjectId ? updatedWork : p))
+        return
+      }
+      // 目标段落不存在时，降级为追加逻辑
+    }
+
+    // 如果是 lyrics 类型且内容包含 [label] 格式的段落（generate_lyrics_tool 结果）
+    if (candidateMeta?.candidateType === 'lyrics') {
+      const segmentPattern = /^\[(.+?)\]\s*(.+)$/gm
+      const parsedSegments: { label: string, text: string }[] = []
+      let match: RegExpExecArray | null
+      while ((match = segmentPattern.exec(lyricsContent)) !== null) {
+        parsedSegments.push({ label: match[1], text: match[2].trim() })
+      }
+      if (parsedSegments.length > 0) {
+        // 根据标签映射类型
+        const typeMap: Record<string, string> = { '副歌': 'chorus', '主歌': 'verse', '桥段': 'bridge', '前奏': 'intro', '尾奏': 'outro' }
+        const newLyrics: LyricsSegment[] = parsedSegments.map((seg, idx) => ({
+          id: `ai_seg_${Date.now()}_${idx}`,
+          type: (typeMap[seg.label] || 'verse') as LyricsSegment['type'],
+          order: idx,
+          label: seg.label,
+          text_content: seg.text.replace(/[，。！？；、]/g, '\n'),
+          status: 'draft',
+        }))
+        const newJianpu: JianpuSegment[] = newLyrics.map(s => ({
+          id: s.id,
+          type: s.type,
+          order: s.order,
+          label: s.label,
+          measures: [],
+          status: 'draft',
+        }))
+        const updatedWork = { ...work, lyrics: newLyrics, jianpu: newJianpu }
+        setWork(updatedWork)
+        setProjects(prev => prev.map(p => p.id === currentProjectId ? updatedWork : p))
+        return
+      }
+      // 无 [label] 格式则降级为普通处理
+    }
+
+    // 解析歌词内容：先替换中英文逗号为换行，再识别段落结构
+    const normalized = lyricsContent.trim().replace(/[,，]/g, '\n')
+    const lines = normalized.split('\n').filter(l => l.trim())
+    
+    if (lines.length === 0) {
+      alert('歌词内容为空')
+      return
+    }
+
+    // 检查是否有多行歌词（有段落结构）
+    if (lines.length > 1) {
+      // 多个段落，提示用户选择
+      const choice = window.confirm(
+        `检测到 ${lines.length} 行歌词。\n\n` +
+        `• 确定：替换全部段落\n• 取消：追加到末尾`
+      )
+
+      if (choice) {
+        // 替换全部段落 - 为每行创建一个段落
+        const newLyrics: LyricsSegment[] = lines.map((line, idx) => ({
+          id: `ai_seg_${Date.now()}_${idx}`,
+          type: idx === 0 ? 'chorus' : 'verse' as const,
+          order: idx,
+          label: idx === 0 ? '副歌' : `段落${idx + 1}`,
+          text_content: line.trim(),
+          status: 'draft' as const,
+        }))
+        const newJianpu: JianpuSegment[] = newLyrics.map(s => ({
+          id: s.id,
+          type: s.type,
+          order: s.order,
+          label: s.label,
+          measures: [],
+          status: 'draft' as const,
+        }))
+        const updatedWork = { ...work, lyrics: newLyrics, jianpu: newJianpu }
+        setWork(updatedWork)
+        setProjects(prev => prev.map(p => p.id === currentProjectId ? updatedWork : p))
+      } else {
+        // 追加到末尾
+        const lastSegId = work.lyrics[work.lyrics.length - 1]?.id || ''
+        insertSegment(work.lyrics.length - 1)
+        // 延迟更新内容
+        setTimeout(() => {
+          const newLyrics = work.lyrics.map((s, i) => 
+            i === work.lyrics.length - 1 ? { ...s, text_content: lines.join('\n') } : s
+          )
+          const updatedWork = { ...work, lyrics: newLyrics }
+          setWork(updatedWork)
+          setProjects(prev => prev.map(p => p.id === currentProjectId ? updatedWork : p))
+        }, 100)
+      }
+    } else {
+      // 单行歌词，追加或替换当前选中段落
+      if (selectedSegmentId) {
+        // 替换当前选中段落
+        const newLyrics = work.lyrics.map(s =>
+          s.id === selectedSegmentId ? { ...s, text_content: lyricsContent.trim() } : s
+        )
+        const updatedWork = { ...work, lyrics: newLyrics }
+        setWork(updatedWork)
+        setProjects(prev => prev.map(p => p.id === currentProjectId ? updatedWork : p))
+      } else {
+        // 追加新段落
+        insertSegment(work.lyrics.length - 1)
+        setTimeout(() => {
+          const newLyrics = [...work.lyrics, {
+            id: `ai_seg_${Date.now()}`,
+            type: 'verse' as const,
+            order: work.lyrics.length,
+            label: `段落${work.lyrics.length + 1}`,
+            text_content: lyricsContent.trim(),
+            status: 'draft' as const,
+          }]
+          const newJianpu = [...work.jianpu, {
+            id: `ai_seg_${Date.now()}`,
+            type: 'verse' as const,
+            order: work.lyrics.length,
+            label: `段落${work.lyrics.length + 1}`,
+            measures: [],
+            status: 'draft' as const,
+          }]
+          const updatedWork = { ...work, lyrics: newLyrics, jianpu: newJianpu }
+          setWork(updatedWork)
+          setProjects(prev => prev.map(p => p.id === currentProjectId ? updatedWork : p))
+        }, 100)
+      }
+    }
+
+    // 清空待应用歌词
+    pendingLyricsRef.current = null
+    
+    // 添加系统消息提示
+    setMessages(prev => [...prev, { 
+      role: 'assistant', 
+      content: '✅ 歌词已应用到工作区！',
+      msgType: 'system',
+      timestamp: Date.now(),
+    }])
+  }
+
   // 清空消息上下文
   const clearMessages = async () => {
     try {
       await fetch(`${API_URL}/api/v1/projects/${currentProjectId}/chat`, { method: 'DELETE' })
-      setMessages([{ role: 'assistant', content: '消息已清空，开始新的对话吧！' }])
+      setMessages([{ role: 'assistant', content: '消息已清空，开始新的对话吧！', timestamp: Date.now() }])
     } catch (err) {
       console.error('清空失败:', err)
     }
@@ -568,9 +768,11 @@ export default function WorkspaceDemo() {
 
     const userMessage = input.trim()
     setInput('')
-    setMessages(prev => [...prev, { role: 'user', content: userMessage }])
+    setMessages(prev => [...prev, { role: 'user', content: userMessage, timestamp: Date.now() }])
     setIsStreaming(true)
-    setMessages(prev => [...prev, { role: 'assistant', content: '' }])
+    pendingLyricsRef.current = null
+    // 创建空的助手消息占位符
+    setMessages(prev => [...prev, { role: 'assistant', content: '', msgType: 'text_chunk', lyricsContent: '', timestamp: Date.now() }])
 
     try {
       const response = await fetch(`${API_URL}/api/v1/projects/${currentProjectId}/chat`, {
@@ -604,39 +806,61 @@ export default function WorkspaceDemo() {
                   const data = JSON.parse(dataStr)
 
                   if (currentEvent === 'thought') {
-                    // ReAct: 思考过程
+                    // ReAct: 思考过程 - 创建独立消息块
                     const thought = data.content || ''
-                    setMessages(prev => {
-                      const newMsgs = [...prev]
-                      const last = newMsgs[newMsgs.length - 1]
-                      if (last && last.role === 'assistant') {
-                        newMsgs[newMsgs.length - 1] = {
-                          ...last,
-                          content: last.content + (thought ? `💭 ${thought}\n` : '')
-                        }
-                      }
-                      return newMsgs
-                    })
+                    if (thought) {
+                      setMessages(prev => [...prev, { role: 'assistant', content: `💭 ${thought}`, msgType: 'thought', timestamp: Date.now() }])
+                    }
                   } else if (currentEvent === 'action') {
-                    // ReAct: 执行行动
+                    // ReAct: 执行行动 - 创建独立消息块
                     const tool = data.tool || ''
-                    const args = data.args || {}
-                    setMessages(prev => {
-                      const newMsgs = [...prev]
-                      const last = newMsgs[newMsgs.length - 1]
-                      if (last && last.role === 'assistant') {
-                        newMsgs[newMsgs.length - 1] = {
-                          ...last,
-                          content: last.content + `🔧 调用工具: ${tool}\n`
-                        }
-                      }
-                      return newMsgs
-                    })
+                    setMessages(prev => [...prev, { role: 'assistant', content: `🔧 调用工具: ${tool}`, msgType: 'action', timestamp: Date.now() }])
                   } else if (currentEvent === 'observation') {
-                    // ReAct: 观察结果（含评估）
+                    // ReAct: 观察结果（含评估）- 创建独立消息块
                     const result = data.result || {}
                     const evaluation = data.evaluation
                     const resultStr = typeof result === 'string' ? result : JSON.stringify(result, null, 2)
+                    
+                    // 从observation中提取歌词内容
+                    let extractedLyrics = ''
+                    if (result && typeof result === 'object') {
+                      const contentObj = result.content
+                      // 格式1: { content: "纯字符串歌词" }
+                      if (typeof contentObj === 'string' && contentObj.trim()) {
+                        extractedLyrics = contentObj
+                      }
+                      // 格式2: { content: { text: "歌词" } }  — segment 重写
+                      else if (contentObj && typeof contentObj === 'object' && contentObj.text && typeof contentObj.text === 'string') {
+                        extractedLyrics = contentObj.text
+                      }
+                      // 格式3: { content: { segments: [{ text, label, id }] } }  — 完整生成（如 generate_lyrics_tool）
+                      else if (contentObj && typeof contentObj === 'object' && Array.isArray(contentObj.segments)) {
+                        extractedLyrics = contentObj.segments
+                          .map((seg: any) => `[${seg.label || seg.id}] ${seg.text}`)
+                          .join('\n\n')
+                      }
+                      // 格式4: { lyrics: "歌词" }
+                      if (!extractedLyrics && result.lyrics && typeof result.lyrics === 'string' && result.lyrics.trim()) {
+                        extractedLyrics = result.lyrics
+                      }
+                      // 格式5: { text: "歌词" }
+                      if (!extractedLyrics && result.text && typeof result.text === 'string' && result.text.trim()) {
+                        extractedLyrics = result.text
+                      }
+                      // 格式6: { candidate: { text_content: "..." } }
+                      if (!extractedLyrics && result.candidate && result.candidate.text_content) {
+                        extractedLyrics = result.candidate.text_content
+                      }
+                    }
+                    
+                    // 如果提取到了歌词，更新pendingLyrics
+                    if (extractedLyrics.trim()) {
+                      pendingLyricsRef.current = {
+                        content: extractedLyrics,
+                        timestamp: Date.now(),
+                      }
+                    }
+                    
                     let evalStr = ''
                     if (evaluation && evaluation.quality && evaluation.quality !== 'n/a') {
                       const qualityEmoji = evaluation.quality === 'good' ? '✨' : evaluation.quality === 'acceptable' ? '👍' : '⚠️'
@@ -645,45 +869,58 @@ export default function WorkspaceDemo() {
                         evalStr += ` ${evaluation.reason}`
                       }
                     }
-                    setMessages(prev => {
-                      const newMsgs = [...prev]
-                      const last = newMsgs[newMsgs.length - 1]
-                      if (last && last.role === 'assistant') {
-                        newMsgs[newMsgs.length - 1] = {
-                          ...last,
-                          content: last.content + `✅ 结果: ${resultStr}${evalStr}\n`
-                        }
-                      }
-                      return newMsgs
-                    })
+                    const description = result.description || ''
+                    const displayLyrics = extractedLyrics ? formatLyricsForDisplay(extractedLyrics) : ''
+                    // 提取候选元信息：目标段落ID和类型
+                    const contentObj = result.content
+                    const targetId = (contentObj && typeof contentObj === 'object' && contentObj.id) ? contentObj.id : undefined
+                    const candidateType = result.type || undefined
+                    setMessages(prev => [...prev, { 
+                      role: 'assistant', 
+                      content: displayLyrics || `✅ 结果: ${resultStr}${evalStr}`, 
+                      msgType: 'observation', 
+                      lyricsContent: extractedLyrics, 
+                      timestamp: Date.now(),
+                      candidateMeta: { targetId, candidateType, description },
+                    }])
                   } else if (currentEvent === 'clarify') {
-                    // 需要用户澄清
+                    // 需要用户澄清 - 创建独立消息块
                     const question = data.question || '请提供更多信息'
-                    setMessages(prev => {
-                      const newMsgs = [...prev]
-                      const last = newMsgs[newMsgs.length - 1]
-                      if (last && last.role === 'assistant') {
-                        newMsgs[newMsgs.length - 1] = {
-                          ...last,
-                          content: last.content + `❓ ${question}\n`
-                        }
-                      }
-                      return newMsgs
-                    })
+                    setMessages(prev => [...prev, { role: 'assistant', content: `❓ ${question}`, msgType: 'clarify', timestamp: Date.now() }])
                   } else if (currentEvent === 'text_chunk') {
-                    // 文本流式输出
+                    // 文本流式输出 - 追加到最后一个消息块
                     const chunk = data.chunk || ''
+                    const currentTimestamp = Date.now()
+                    
                     setMessages(prev => {
                       const newMsgs = [...prev]
-                      const last = newMsgs[newMsgs.length - 1]
-                      if (last && last.role === 'assistant') {
+                      const lastMsg = newMsgs[newMsgs.length - 1]
+                      if (lastMsg && lastMsg.role === 'assistant') {
+                        // 更新最后一个消息块
                         newMsgs[newMsgs.length - 1] = {
-                          ...last,
-                          content: last.content + chunk
+                          ...lastMsg,
+                          content: lastMsg.content + chunk,
+                          lyricsContent: (lastMsg.lyricsContent || '') + chunk,
+                          timestamp: currentTimestamp,
                         }
+                      } else {
+                        // 创建新消息块
+                        newMsgs.push({ 
+                          role: 'assistant', 
+                          content: chunk, 
+                          msgType: 'text_chunk', 
+                          lyricsContent: chunk, 
+                          timestamp: currentTimestamp 
+                        })
                       }
                       return newMsgs
                     })
+                    
+                    // 追踪最新的歌词内容
+                    pendingLyricsRef.current = {
+                      content: (pendingLyricsRef.current?.content || '') + chunk,
+                      timestamp: currentTimestamp,
+                    }
                   } else if (currentEvent === 'work_update') {
                     // 作品更新
                     setWork(data.work || data)
@@ -700,34 +937,15 @@ export default function WorkspaceDemo() {
                     // 工具结束
                     console.log('工具结束:', data.tool_name)
                   } else if (currentEvent === 'error') {
-                    // 错误
-                    setMessages(prev => {
-                      const newMsgs = [...prev]
-                      const last = newMsgs[newMsgs.length - 1]
-                      if (last && last.role === 'assistant') {
-                        newMsgs[newMsgs.length - 1] = {
-                          ...last,
-                          content: `错误: ${data.message || '未知错误'}`
-                        }
-                      }
-                      return newMsgs
-                    })
+                    // 错误 - 创建独立消息块
+                    setMessages(prev => [...prev, { role: 'assistant', content: `❌ 错误: ${data.message || '未知错误'}`, msgType: 'error', timestamp: Date.now() }])
                   }
                 } catch {
-                  // 非 JSON 数据，直接追加
-                  setMessages(prev => {
-                    const newMsgs = [...prev]
-                    const last = newMsgs[newMsgs.length - 1]
-                    if (last && last.role === 'assistant') {
-                      newMsgs[newMsgs.length - 1] = {
-                        ...last,
-                        content: last.content + dataStr
-                      }
-                    }
-                    return newMsgs
-                  })
+                  // 非 JSON 数据，创建独立消息块
+                  if (dataStr.trim()) {
+                    setMessages(prev => [...prev, { role: 'assistant', content: dataStr, msgType: 'raw', timestamp: Date.now() }])
+                  }
                 }
-                console.log(messages)
               }
             }
           }
@@ -735,7 +953,7 @@ export default function WorkspaceDemo() {
       }
     } catch (err) {
       console.error('请求失败:', err)
-      setMessages(prev => [...prev, { role: 'assistant', content: '抱歉，发生了错误。' }])
+      setMessages(prev => [...prev, { role: 'assistant', content: '抱歉，发生了错误。', timestamp: Date.now() }])
     } finally {
       setIsStreaming(false)
     }
@@ -1023,19 +1241,146 @@ export default function WorkspaceDemo() {
         </div>
 
         <div style={styles.chatMessages}>
-          {messages.map((msg, idx) => (
-            <div
-              key={idx}
-              style={{
-                ...styles.message,
-                backgroundColor: msg.role === 'user' ? '#667eea' : '#f0f0f0',
-                color: msg.role === 'user' ? '#fff' : '#333',
-                marginLeft: msg.role === 'user' ? 'auto' : 0,
-              }}
-            >
-              {msg.content || '...'}
-            </div>
-          ))}
+          {messages.map((msg, idx) => {
+            // 根据消息类型确定样式
+            let msgStyle: React.CSSProperties = { ...styles.message }
+
+            if (msg.role === 'user') {
+              // 用户消息
+              msgStyle = {
+                ...msgStyle,
+                backgroundColor: '#667eea',
+                color: '#fff',
+                marginLeft: 'auto',
+              }
+            } else {
+              // AI 消息 - 根据类型区分样式
+              switch (msg.msgType) {
+                case 'thought':
+                  msgStyle = {
+                    ...msgStyle,
+                    backgroundColor: '#e3f2fd',
+                    color: '#1565c0',
+                    borderLeft: '3px solid #1976d2',
+                    fontSize: 13,
+                  }
+                  break
+                case 'action':
+                  msgStyle = {
+                    ...msgStyle,
+                    backgroundColor: '#fff3e0',
+                    color: '#e65100',
+                    borderLeft: '3px solid #ff9800',
+                    fontSize: 13,
+                  }
+                  break
+                case 'observation':
+                  msgStyle = {
+                    ...msgStyle,
+                    backgroundColor: '#e8f5e9',
+                    color: '#2e7d32',
+                    borderLeft: '3px solid #4caf50',
+                    fontSize: 13,
+                  }
+                  break
+                case 'clarify':
+                  msgStyle = {
+                    ...msgStyle,
+                    backgroundColor: '#fff8e1',
+                    color: '#f57f17',
+                    borderLeft: '3px solid #ffc107',
+                    fontSize: 13,
+                  }
+                  break
+                case 'error':
+                  msgStyle = {
+                    ...msgStyle,
+                    backgroundColor: '#ffebee',
+                    color: '#c62828',
+                    borderLeft: '3px solid #f44336',
+                    fontSize: 13,
+                  }
+                  break
+                case 'text_chunk':
+                  msgStyle = {
+                    ...msgStyle,
+                    backgroundColor: '#f8f9ff',
+                    color: '#333',
+                    fontSize: 14,
+                    border: '1px solid #e0e0ff',
+                  }
+                  break
+                case 'system':
+                  msgStyle = {
+                    ...msgStyle,
+                    backgroundColor: '#e8f5e9',
+                    color: '#2e7d32',
+                    fontSize: 13,
+                    textAlign: 'center' as const,
+                  }
+                  break
+                case 'apply_prompt':
+                  msgStyle = {
+                    ...msgStyle,
+                    background: 'linear-gradient(135deg, #f0f4ff 0%, #e8ecff 100%)',
+                    color: '#4a5568',
+                    fontSize: 14,
+                    border: '1px solid #c7d2fe',
+                    textAlign: 'center' as const,
+                  }
+                  break
+                default:
+                  msgStyle = {
+                    ...msgStyle,
+                    backgroundColor: '#f0f0f0',
+                    color: '#333',
+                  }
+              }
+            }
+
+            // 判断是否为可应用的歌词提示块
+            const canApply = (msg.msgType === 'apply_prompt' || msg.msgType === 'observation') && msg.lyricsContent && msg.lyricsContent.trim().length > 0
+
+            return (
+              <div
+                key={idx}
+                style={styles.messageWrapper}
+              >
+                <div style={msgStyle}>
+                  {msg.msgType === 'observation' && canApply ? (
+                    <div>
+                      <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: 14, lineHeight: 2 }}>
+                        {msg.content}
+                      </pre>
+                      <button
+                        onClick={() => applyLyricsToWorkspace(msg.lyricsContent!, msg.candidateMeta)}
+                        style={{
+                          marginTop: 12,
+                          padding: '8px 20px',
+                          fontSize: 13,
+                          backgroundColor: '#667eea',
+                          color: '#fff',
+                          border: 'none',
+                          borderRadius: 6,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          width: '100%',
+                          justifyContent: 'center',
+                        }}
+                      >
+                        <span>✨</span>
+                        <span>应用到工作区</span>
+                      </button>
+                    </div>
+                  ) : (
+                    msg.content || '...'
+                  )}
+                </div>
+              </div>
+            )
+          })}
           <div ref={messagesEndRef} />
         </div>
 

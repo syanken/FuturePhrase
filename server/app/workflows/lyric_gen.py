@@ -3,7 +3,7 @@ import json
 from langchain_openai import ChatOpenAI
 from langchain_core.output_parsers import StrOutputParser,JsonOutputParser
 from langchain_core.prompts import ChatPromptTemplate,PromptTemplate
-from core.lyrics_api import query_lyrics, lyrics_details, artist_details
+from core.lyrics_api import LyricsNetCn
 from abc import ABC, abstractmethod
 
 class BaseWorkflow(ABC):
@@ -19,6 +19,7 @@ class BaseWorkflow(ABC):
             api_key=os.getenv("OPENAI_API_KEY"),
             base_url=os.getenv("OPENAI_API_BASE"),
         )
+        self.ln = LyricsNetCn()
 
     @abstractmethod
     async def run(self, user_input: str = None):
@@ -167,7 +168,7 @@ class ImitateWorkflow(BaseWorkflow):
         lyrics = []
         for t in text:
             try:
-                ls, _ = query_lyrics(t)
+                ls= self.ln.query_lyrics(t)
                 lyrics += ls
                 if ls:
                     yield f"data: [系统] 找到 {len(ls)} 条关于「{t}」的资料\n\n"

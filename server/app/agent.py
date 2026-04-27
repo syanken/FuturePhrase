@@ -46,6 +46,7 @@ class LyricAgent:
     ) -> AsyncGenerator[dict, None]:
         """ReAct 模式处理用户消息（项目级隔离）"""
         project = get_project(project_id)
+        print(project,flush=True) 
         if not project:
             yield {"event": "error", "data": {"message": "项目不存在"}}
             return
@@ -72,15 +73,15 @@ class LyricAgent:
                 # # 打印发送给 LLM 的消息
                 # print(f"\n[Thought] 调用 LLM...", flush=True)
                 # print(f"  发送消息列表:", flush=True)
-                for i, msg in enumerate(messages):
-                    msg_type = type(msg).__name__
-                    content = msg.content
-                    if len(content) > 100:
-                        content = content[:100] + "..."
-                    tool_calls_info = ""
-                    if hasattr(msg, 'tool_calls') and msg.tool_calls:
-                        tool_calls_info = f" [tool_calls: {len(msg.tool_calls)}个]"
-                    # print(f"    [{i}] {msg_type}: {content}{tool_calls_info}", flush=True)
+                # for i, msg in enumerate(messages):
+                #     msg_type = type(msg).__name__
+                #     content = msg.content
+                #     if len(content) > 100:
+                #         content = content[:100] + "..."
+                #     tool_calls_info = ""
+                #     if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                #         tool_calls_info = f" [tool_calls: {len(msg.tool_calls)}个]"
+                #     print(f"    [{i}] {msg_type}: {content}{tool_calls_info}", flush=True)
                 
                 # 1. Thought: 模型思考并决定行动
                 response = await self.llm_with_tools.ainvoke(messages)
@@ -118,7 +119,7 @@ class LyricAgent:
                         ))
                         
                         # 处理候选
-                        if tool_name in ["generate_lyrics_tool", "rewrite_segment_tool", "extend_lyrics_tool"]:
+                        if tool_name in ["generate_lyrics_tool", "rewrite_segment_tool", "extend_lyrics_tool","lyric_search"]:
                             if isinstance(tool_result, dict) and "candidate_id" in tool_result:
                                 candidate = add_candidate(
                                     project_id=project_id,
@@ -178,6 +179,7 @@ ReAct模式中，每次响应遵循：Thought → Action → Observation 循环
 - rewrite_segment_tool(segment_label, instruction): 重写段落
 - extend_lyrics_tool(instruction): 续写新段落
 - ask_clarification_tool(question): 向用户提问
+- lyric_search(query): 搜索歌词
 
 【规则】
 - 每次响应先说明思考过程，再决定是否调用工具
@@ -211,7 +213,9 @@ ReAct模式中，每次响应遵循：Thought → Action → Observation 循环
             generate_lyrics_tool,
             rewrite_segment_tool,
             extend_lyrics_tool,
-            ask_clarification_tool
+            ask_clarification_tool,
+            lyric_search,
+            search_local_lyrics,
         )
         
         tool_map = {
@@ -219,6 +223,8 @@ ReAct模式中，每次响应遵循：Thought → Action → Observation 循环
             "rewrite_segment_tool": rewrite_segment_tool,
             "extend_lyrics_tool": extend_lyrics_tool,
             "ask_clarification_tool": ask_clarification_tool,
+            "lyric_search":lyric_search,
+            "search_local_lyrics": search_local_lyrics,
         }
         
         tool_func = tool_map.get(tool_name)
