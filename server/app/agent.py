@@ -23,8 +23,8 @@ class LyricAgent:
         """延迟初始化"""
         if self._llm is None:
             self._llm = ChatOpenAI(
-                # model="hunyuan-turbos-latest",
-                model="hunyuan-lite",
+                # model="",
+                model=os.getenv("MODEL"),
                 streaming=True,
                 temperature=0.7,
                 api_key=os.getenv("OPENAI_API_KEY"),

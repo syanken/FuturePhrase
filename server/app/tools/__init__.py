@@ -31,7 +31,7 @@ def set_current_session_context(project_id: str, work_data: dict):
 def _call_llm(prompt: str) -> str:
     """调用 LLM"""
     llm = ChatOpenAI(
-        model="hunyuan-lite",
+        model=os.getenv("MODEL"),
         streaming=False,
         temperature=0.7,
         api_key=os.getenv("OPENAI_API_KEY"),

@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 
 class BaseWorkflow(ABC):
     """所有 Workflow 的公共基类"""
-    DEFAULT_MODEL = "hunyuan-lite"
+    DEFAULT_MODEL = "deepseek-v3-0324"
     DEFAULT_TEMPERATURE = 0
 
     def __init__(self, model: str = None, temperature: float = None, streaming: bool = True):
